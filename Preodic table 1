@@ -1,5 +1,6 @@
 import sys
 import csv
+from pathlib import Path
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow, QWidget, QGridLayout,
     QPushButton, QLabel, QDialog, QVBoxLayout
@@ -15,37 +16,44 @@ def get_color(type_name):
         "alkali metal": "pink",
         "alkaline earth metal": "magenta",
         "transition metal": "lightskyblue",
-        "transactinide":"lightskyblue",
+        "transactinide": "lightskyblue",
         "post-transition metal": "orange",
         "metalloid": "green",
         "lanthanide": "lightyellow",
         "actinide": "red",
     }
-
-    normalized_type = type_name.strip().lower()  # remove extra spaces and make lowercase
+    normalized_type = (type_name or "").strip().lower()
     return type_colors.get(normalized_type, "gray")
 
-
-def load_elements_from_csv(filepath):
+def load_elements_from_csv(filepath: Path):
     elements_list = []
-    with open(filepath, newline='', encoding='utf-8') as csvfile:
-        reader = csv.DictReader(csvfile)
-        for row in reader:
-            try:
-                Type1=row["Type"]
-                symbol = row["Symbol"]
-                atomic_number = int(row["Atomic_Number"])
-                name = row["Name"]
-                row_num = int(float(row["Graph.Period"]))
-                col_num = int(float(row["Graph.Group"]))
-                color = get_color(Type1)
-                elements_list.append([row_num, col_num, symbol, atomic_number, name, color])
-            except (ValueError, KeyError):
-                continue
+    try:
+        with filepath.open(newline='', encoding='utf-8') as csvfile:
+            reader = csv.DictReader(csvfile)
+            for row in reader:
+                try:
+                    type1 = row.get("Type", "")
+                    symbol = row["Symbol"]
+                    atomic_number = int(float(row["Atomic_Number"]))
+                    name = row["Name"]
+                    row_num = int(float(row["Graph.Period"]))  # 1-based is fine for QGridLayout
+                    col_num = int(float(row["Graph.Group"]))
+                    color = get_color(type1)
+                    elements_list.append([row_num, col_num, symbol, atomic_number, name, color])
+                except (ValueError, KeyError, TypeError):
+                    # Skip malformed rows quietly
+                    continue
+    except FileNotFoundError:
+        raise FileNotFoundError(f"CSV not found at: {filepath}")
     return elements_list
 
-# CSV path
-elements = load_elements_from_csv('C:\Users\Admin\Documents\GitHub\Preodic-Table\elementdatavalues.csv')
+# ---- Paths (use forward slashes or pathlib) ----
+BASE = Path("C:/Users/Admin/Documents/GitHub/Preodic-Table")
+CSV_PATH = BASE / "elementdatavalues.csv"
+BG_IMAGE_PATH = BASE / "pexels-eberhardgross-443446.jpg"
+
+elements = load_elements_from_csv(CSV_PATH)
+
 class ElementDetailDialog(QDialog):
     def __init__(self, name, symbol, atomic_number, color):
         super().__init__()
@@ -59,10 +67,8 @@ class ElementDetailDialog(QDialog):
         atomic_label = QLabel(f"<b>Atomic Number:</b> {atomic_number}")
         color_label = QLabel(f"<b>Color:</b> {color}")
 
-        name_label.setAlignment(Qt.AlignCenter)
-        symbol_label.setAlignment(Qt.AlignCenter)
-        atomic_label.setAlignment(Qt.AlignCenter)
-        color_label.setAlignment(Qt.AlignCenter)
+        for w in (name_label, symbol_label, atomic_label, color_label):
+            w.setAlignment(Qt.AlignCenter)
 
         layout.addWidget(name_label)
         layout.addWidget(symbol_label)
@@ -75,10 +81,10 @@ class PeriodicTable(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Periodic Table")
-        self.setStyleSheet("background-color: black;")
-        self.setStyleSheet("background-image: url('C:\Users\Admin\Documents\GitHub\Preodic-Table\pexels-eberhardgross-443446.jpg'); background-position: center; background-repeat: no-repeat; background-attachment: fixed;")
         self.setFixedSize(1360, 700)
-        self.background_image = QPixmap("C:\Users\Admin\Documents\GitHub\Preodic-Table\pexels-eberhardgross-443446.jpg")
+
+        # Use only one background method (palette with QPixmap)
+        self.background_image = QPixmap(str(BG_IMAGE_PATH))
         self.update_background()
 
         self.central_widget = QWidget()
@@ -87,39 +93,59 @@ class PeriodicTable(QMainWindow):
         self.grid_layout.setSpacing(5)
 
         self.create_elements()
-       
 
     def create_elements(self):
+        # Valid hover color (QSS): use hex or a standard name
+        hover_hex = "#CD3700"  # "OrangeRed3" equivalent
         for element in elements:
             row, col, symbol, atomic_number, name, color = element
             btn = QPushButton(f"{symbol}\n{atomic_number}")
             btn.setFixedSize(77, 77)
-            btn.setStyleSheet(f"background-color: {color}; color: black; border: 2px solid black;")
+            btn.setStyleSheet(
+                f"background-color: {color}; color: black; border: 2px solid black;"
+            )
             btn.setToolTip(f"{name} (Atomic Number: {atomic_number})")
 
+            # Click handler capturing current values
             btn.clicked.connect(self.create_button_handler(name, symbol, atomic_number, color))
-            btn.enterEvent = lambda event, b=btn, c=color: self.on_hover(event, b, "OrangeRed3")
-            btn.leaveEvent = lambda event, b=btn, c=color: self.off_hover(event, b, c)
-            
+
+            # Per-button hover handlers with default args to bind current color
+            btn.enterEvent = (lambda event, b=btn: self.on_hover(event, b, hover_hex))
+            btn.leaveEvent = (lambda event, b=btn, c=color: self.off_hover(event, b, c))
+
+            # Note: QGridLayout uses 0-based indices, but 1-based works (it just leaves row 0/col 0 empty)
             self.grid_layout.addWidget(btn, row, col, alignment=Qt.AlignCenter)
+
     def create_button_handler(self, name, symbol, atomic_number, color):
         return lambda: self.show_element_details(name, symbol, atomic_number, color)
 
     def show_element_details(self, name, symbol, atomic_number, color):
         dialog = ElementDetailDialog(name, symbol, atomic_number, color)
         dialog.exec_()
-        
-    def on_hover(self, event, button, color):
-        button.setStyleSheet(f"background-color: {color}; color: white; border: 2px solid black;")
-        button.raise_()  # Bring the button to the top layer
-        button.setFixedSize(90, 90)  # Enlarge the button
+
+    def on_hover(self, event, button, color_hex):
+        button.setStyleSheet(
+            f"background-color: {color_hex}; color: white; border: 2px solid black;"
+        )
+        button.raise_()
+        button.setFixedSize(90, 90)
 
     def off_hover(self, event, button, color):
-        button.setStyleSheet(f"background-color: {color}; color: black; border: 2px solid black;")
-        button.setFixedSize(77, 77)  # Restore original size
+        button.setStyleSheet(
+            f"background-color: {color}; color: black; border: 2px solid black;"
+        )
+        button.setFixedSize(77, 77)
+
+    def resizeEvent(self, event):
+        # Keep background scaled when window changes (even though we fixed size)
+        self.update_background()
+        super().resizeEvent(event)
+
     def update_background(self):
         if not self.background_image.isNull():
-            scaled_image = self.background_image.scaled(self.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            scaled_image = self.background_image.scaled(
+                self.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation
+            )
             palette = QPalette()
             palette.setBrush(QPalette.Window, QBrush(scaled_image))
             self.setPalette(palette)
